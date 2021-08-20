@@ -1,0 +1,332 @@
+from __future__ import print_function, division
+import scipy
+import tensorflow
+from keras.layers.merge import _Merge
+from tensorflow.keras.layers import Input, Dense, Reshape, Flatten, Dropout, Concatenate,Conv3DTranspose,Subtract,Multiply,Lambda,GaussianNoise,SeparableConv1D,AveragePooling3D,Add,MaxPooling3D,GlobalAveragePooling3D
+from tensorflow.keras.layers import BatchNormalization, LayerNormalization,Activation, ZeroPadding2D
+from tensorflow.keras.layers import LeakyReLU,ReLU
+from tensorflow.keras.layers import UpSampling3D, Conv3D
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.optimizers import Adam,RMSprop
+import datetime
+import matplotlib.pyplot as plt
+import scipy.io as scio
+from glob import glob
+import numpy as np
+import os
+import random
+from tensorflow.keras.losses import BinaryCrossentropy,CategoricalCrossentropy
+import tensorflow.keras.backend as K
+from functools import partial
+
+class DataLoader():
+    def __init__(self,  img_res=(80,96,80)):
+        self.img_res = img_res
+
+    def load_batch(self, batch_size):
+        path = glob('D:/MRIHAR/nose/train/*mat')
+        random.shuffle(path)
+        self.n_batches = int(len(path) / batch_size)
+        for i in range(self.n_batches-1):
+            batch = path[i*batch_size:(i+1)*batch_size]
+            imgs_A, fss,mas,zs= [], [], [], []
+            for img in batch:
+                img_A,fs,ma,z= self.imread(img)
+                img_A = img_A.reshape((80, 96, 80,1))
+                #mask = img_A.reshape((96, 96, 96, 1))
+                fs = fs.reshape((1))
+                ma = ma.reshape((1))
+                z = z.reshape((5))
+                imgs_A.append(img_A)
+                fss.append(fs)
+                mas.append(ma)
+                zs.append(z)
+            yield imgs_A,fss,mas,zs
+
+    def load_val_batch(self):
+        batch_size = 1
+        path = glob('D:/MRIHAR/nose/test/*.mat')
+        print(path)
+        n_batches = 644
+        for i in range(n_batches):
+            batch = path[i]
+            img_A = self.imread2(batch)
+            img_A = img_A.reshape((1,80, 96, 80,1))
+            yield img_A,batch
+
+    def imread(self, path):
+        k = scio.loadmat(path)
+        img=k['img']
+        fs=k['fs']
+        ma=k['ma']
+        z = k['z']
+        return img,fs,ma,z
+
+    def imread2(self, path):
+        k = scio.loadmat(path)
+        img = k['img']
+        return img
+
+class HarmonyGan():
+
+
+    def __init__(self):
+
+        def wasserstein_loss(y_true, y_pred):
+            return K.mean(y_true * y_pred)
+
+        def coss(y_true, y_pred):
+            y1 = K.reshape(y_true, (8, 614400))
+            y2 = K.reshape(y_pred, (8, 614400))
+            q = K.min(K.batch_dot(y1, y2, axes=1) / (K.sqrt(K.batch_dot(y1, y1, axes=1)) * K.sqrt(K.batch_dot(y2, y2, axes=1))))
+            return 0.5 * (0.4869 - q) + 0.5 * K.abs(q - 0.4869)
+
+        def maee(y_true, y_pred):
+            y1 = K.reshape(y_true, (8, 614400))
+            y2 = K.reshape(y_pred, (8, 614400))
+            q = K.max(K.mean(K.abs(y1 - y2), axis=1))
+            return 0.5 * (q - 0.3561) + 0.5 * K.abs(q - 0.3561)
+
+        def _merge_function(inputs):
+            alpha = K.random_uniform((8, 1, 1, 1,1))
+            return (alpha * inputs[0]) + ((1 - alpha) * inputs[1])
+
+
+        self.img_shape = (80, 96, 80, 1)
+        self.data_loader = DataLoader(img_res=(80, 96, 80))
+        self.gf = 16
+        self.df = 16
+        optimizer_d = Adam(
+    learning_rate=0.0001,
+    beta_1=0,
+    beta_2=0.9,
+    epsilon=1e-07,
+    amsgrad=False,
+    name="Adam")
+        self.generator = self.build_generator()
+        self.critic = self.build_critic()
+        self.generator.trainable = False
+        img_A = Input(shape=self.img_shape)
+        z= Input(shape=(5))
+        fake_A = self.generator(img_A)
+        [f1, f2] = self.critic([fake_A,z])
+        [a1, a2] = self.critic([img_A,z])
+        interpolated_img = _merge_function([img_A, fake_A])
+        [i1, i2] = self.critic([interpolated_img,z])
+        partial_gp_loss = partial(self.gradient_penalty_loss, averaged_samples=interpolated_img)
+        partial_gp_loss.__name__ = 'gradient_penalty'  # Keras requires function names
+        self.critic_model = Model(inputs=[img_A,z],
+                                  outputs=[a1, a2, f1, f2, i1, i2])
+        self.critic_model.compile(loss=[wasserstein_loss, wasserstein_loss,
+                                        wasserstein_loss, wasserstein_loss,
+                                        partial_gp_loss, partial_gp_loss],
+                                  optimizer=optimizer_d,
+                                  loss_weights=[1,1,1,1, 10, 10])
+        self.critic.trainable = False
+        self.generator.trainable = True
+        optimizer = Adam(
+    learning_rate=0.0001,
+    beta_1=0,
+    beta_2=0.9,
+    epsilon=1e-07,
+    amsgrad=False,
+    name="Adam")
+    
+        # Sampled noise for input to generator
+        img_B = Input(shape=(80, 96, 80, 1))
+        z=Input(shape=(5))
+        # Generate images based of noise
+        fake_B = self.generator(img_B)
+        # Discriminator determines validity
+        [v1, v2] = self.critic([fake_B,z])
+        # Defines generator model
+        self.generator_model = Model([img_B,z], [v1, v2,fake_B,fake_B])
+        we1=100000000
+        we2 = 100000000
+        self.generator_model.compile(loss=[wasserstein_loss,wasserstein_loss,maee,coss],loss_weights=[1, 1,we1,we2],
+                                     optimizer=optimizer)
+
+    def gradient_penalty_loss(self, y_true, y_pred, averaged_samples):
+        """
+        Computes gradient penalty based on prediction and weighted real / fake samples
+        """
+        gradients = K.gradients(y_pred, averaged_samples)[0]
+        # compute the euclidean norm by squaring ...
+        gradients_sqr = K.square(gradients)
+        #   ... summing over the rows ...
+        gradients_sqr_sum = K.sum(gradients_sqr,
+                                  axis=np.arange(1, len(gradients_sqr.shape)))
+        #   ... and sqrt
+        gradient_l2_norm = K.sqrt(gradients_sqr_sum)
+        # compute lambda * (1 - ||grad||)^2 still for each single sample
+        gradient_penalty = K.square(1 - gradient_l2_norm)
+        # return the mean as loss over all the batch samples
+        return K.mean(gradient_penalty)
+
+
+    def build_generator(self):
+        """U-Net Generator"""
+
+        def mul(x):
+            z = K.abs(K.sign(x[0]))
+            return tensorflow.multiply(z, x[1])
+
+        def conv2d(layer_input, filters, f_size=3, bh=1):
+            """Layers used during downsampling"""
+            d = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(layer_input)
+            if bh == 1:
+                d = BatchNormalization()(d)
+            d = LeakyReLU(alpha=0.2)(d)
+            return d
+
+        def conv2dd(layer_input, filters, f_size=3):
+            """Layers used during downsampling"""
+            d = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(layer_input)
+            d = LeakyReLU(alpha=0.2)(d)
+            return d
+
+        def deconv2d(layer_input, skip_input, filters, f_size=3, dropout_rate=0, bh=1):
+            """Layers used during upsampling"""
+            u = UpSampling3D(size=2)(layer_input)
+            u = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(u)
+            if bh == 1:
+                u = BatchNormalization()(u)
+            u = LeakyReLU(alpha=0.2)(u)
+            u = Concatenate()([u, skip_input])
+            u = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(u)
+            if bh == 1:
+                u = BatchNormalization()(u)
+            u = LeakyReLU(alpha=0.2)(u)
+            return u
+
+        # Image input
+        d0 = Input(shape=self.img_shape)
+        # Downsampling
+        d1 = conv2dd(d0, self.gf)  # 40
+        dd1 = AveragePooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d1)
+        d2 = conv2d(dd1, self.gf * 2)  # 20
+        dd2 = AveragePooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d2)
+        d3 = conv2d(dd2, self.gf * 4)  # 10
+        dd3 = AveragePooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d3)
+        d4 = conv2d(dd3, self.gf * 8)  # 5
+        dd4 = AveragePooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d4)
+
+        dd4 = Conv3D(self.gf * 8, kernel_size=3, strides=1, padding='same')(dd4)
+        dd4 = BatchNormalization()(dd4)
+        dd4 = LeakyReLU(alpha=0.2)(dd4)
+        u2 = deconv2d(dd4, d4, self.gf * 8)
+        # Upsampling
+        u3 = deconv2d(u2, d3, self.gf * 4)
+        u4 = deconv2d(u3, d2, self.gf * 2)
+        u5 = deconv2d(u4, d1, self.gf)
+        u5 = Concatenate()([u5, d0])
+        output_img = Conv3D(1, kernel_size=3, strides=1, padding='same')(u5)
+        output_img = Lambda(mul, output_shape=(80, 96, 80, 1))([d0,output_img])
+        Model(d0, output_img).summary()
+        return Model(d0, output_img)
+
+    def build_critic(self):
+
+        def d_layer(layer_input, filters, f_size=3, bh=1):
+            """Discriminator layer"""
+            d = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(layer_input)
+            if bh == 1:
+                d =BatchNormalization()(d)
+            d = LeakyReLU(alpha=0.2)(d)
+            d = AveragePooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d)
+            return d
+
+        def d_layerr(layer_input, filters, f_size=3, bh=0):
+            """Discriminator layer"""
+            d = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(layer_input)
+            d = LeakyReLU(alpha=0.2)(d)
+            d = AveragePooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d)
+            return d
+        img_A = Input(shape=self.img_shape)
+        z=Input(shape=(5))
+        # Concatenate image and conditioning image by channels to produce input
+
+        d1 = d_layerr(img_A, self.df * 1)
+        d2 = d_layer(d1, self.df * 2)
+        d3 = d_layer(d2, self.df * 4)
+        d4 = d_layer(d3, self.df * 8)
+        q = Flatten()(d4)
+        q = Dense(256)(q)
+        q=Concatenate()([q,z])
+        q = BatchNormalization()(q)
+        q=LeakyReLU(alpha=0.2)(q)
+        q = Dense(1024)(q)
+        q = BatchNormalization()(q)
+        q = LeakyReLU(alpha=0.2)(q)
+        v1 = Dense(1)(q)
+        v2 = Dense(1)(q)
+
+        Model([img_A,z], [v1, v2]).summary()
+        return Model([img_A,z], [v1, v2])
+
+    def train(self, epochs, batch_size,sample_interval=50):
+        start_time = datetime.datetime.now()
+        o = 0
+        for epoch in range(epochs):
+            q1=[]
+            q2=[]
+            q3=[]
+            q4 = []
+            for batch_i,(imgs_A,fs,ma,z) in enumerate(self.data_loader.load_batch(batch_size)):
+                imgs_A=np.array(imgs_A)
+                fs=np.array(fs)
+                z=np.array(z)
+                ma = np.array(ma)
+                dummy = np.zeros((batch_size,1))
+                d_loss1 = self.critic_model.train_on_batch([imgs_A,z], [fs, ma,fs,ma,dummy,dummy])
+                q1.append(d_loss1)
+                o = o + 1
+                if o == 5:
+                    o = 0
+                    g_loss1 = self.generator_model.train_on_batch([imgs_A, z], [-fs, -ma,imgs_A,imgs_A])
+                else:
+                    g_loss1 = np.zeros((5))
+                    
+                q3.append(g_loss1)
+                elapsed_time = datetime.datetime.now() - start_time
+                
+                # Plot the progress
+                print("[Epoch %d/%d] [Batch %d/%d]\n"
+                      "[D loss:%f,fs:%f,ma:%f,fs:%f,ma:%f,du:%f,du:%f]\n"
+                      #"[D loss:%f,fs:%f,ma:%f,fs:%f,ma:%f,du:%f,du:%f]\n"
+                      "[G loss:%f,fs:%f,ma:%f,mae:%f,cos:%f]"
+                    #  "we1:%f"
+                     # "[G loss:%f,mae:%f,cos:%f]"
+                      " time: %s " % (
+                        epoch, epochs,
+                        batch_i, self.data_loader.n_batches,
+                        d_loss1[0], d_loss1[1], d_loss1[2],d_loss1[3], d_loss1[4], d_loss1[5],d_loss1[6],
+                        #d_loss2[0], d_loss2[1], d_loss2[2],d_loss2[3], d_loss2[4], d_loss2[5],d_loss2[6],
+                        # d_loss_fake[0], d_loss_fake[1], d_loss_fake[2], d_loss_fake[3],d_loss_fake[4],
+                        g_loss1[0], g_loss1[1], g_loss1[2],g_loss1[3],g_loss1[4],
+                        #g_loss2[0], g_loss2[1], g_loss2[2],
+                        #g_loss2[0], g_loss2[1], g_loss2[2],
+                        elapsed_time))
+
+            aa1 = 'D:/MRIHAR/model7/g_epoch' + str(epoch) + '.h5'
+            self.generator.save(aa1)
+            aa1 = 'D:/MRIHAR/model7/c_epoch' + str(epoch) + '.h5'
+            self.critic.save(aa1)
+            aa2 = 'D:/MRIHAR/model7/a_epoch' + str(epoch) + '.mat'
+            scipy.io.savemat(aa2, {'q1': q1, 'q2': q2, 'q3': q3})
+
+
+            if np.mod(epoch + 1, 5 ) == 0 :
+                for batch_i, (imgs_A, batch) in enumerate(self.data_loader.load_val_batch()):
+                    imgs_A = np.array(imgs_A)
+                    g_loss = self.generator.predict_on_batch(imgs_A)
+                    a2 = 'D:/MRIHAR/6test-har' + str(epoch + 1) + '/' + batch[20:len(batch) - 4] + '.mat'
+                    scipy.io.savemat(a2, {'img': g_loss[0]})
+
+
+
+
+
+if __name__ == '__main__':
+    gan = HarmonyGan()
+    gan.train(epochs=100000, batch_size=8, sample_interval=200)
