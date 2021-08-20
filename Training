@@ -1,3 +1,4 @@
+#Basic WGAN-GP model training was revised from code in https://github.com/eriklindernoren/Keras-GAN/blob/master/wgan_gp/wgan_gp.py
 from __future__ import print_function, division
 import scipy
 import tensorflow
@@ -20,6 +21,7 @@ import tensorflow.keras.backend as K
 from functools import partial
 
 class DataLoader():
+#load data from training, including images, FS and MA labels, and demographic informations
     def __init__(self,  img_res=(80,96,80)):
         self.img_res = img_res
 
@@ -67,9 +69,9 @@ class DataLoader():
         img = k['img']
         return img
 
+
 class HarmonyGan():
-
-
+#define HGAN structrure and implemention
     def __init__(self):
 
         def wasserstein_loss(y_true, y_pred):
@@ -147,6 +149,7 @@ class HarmonyGan():
                                      optimizer=optimizer)
 
     def gradient_penalty_loss(self, y_true, y_pred, averaged_samples):
+    #GP for better training in WGAN
         """
         Computes gradient penalty based on prediction and weighted real / fake samples
         """
@@ -323,10 +326,6 @@ class HarmonyGan():
                     a2 = 'D:/MRIHAR/6test-har' + str(epoch + 1) + '/' + batch[20:len(batch) - 4] + '.mat'
                     scipy.io.savemat(a2, {'img': g_loss[0]})
 
-
-
-
-
 if __name__ == '__main__':
     gan = HarmonyGan()
-    gan.train(epochs=100000, batch_size=8, sample_interval=200) 
+    gan.train(epochs=100000, batch_size=8, sample_interval=200)
