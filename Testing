@@ -1,0 +1,30 @@
+from tensorflow.keras.models import load_model
+import scipy
+import scipy.io as scio
+from glob import glob
+import tensorflow
+import numpy as np
+
+def load_val_batch():
+    batch_size = 1
+    path = glob('H:\ABIDE\ABIDE\mri\smwp1*.mat')
+    print(path)
+    n_batches = len(path)
+    for i in range(n_batches):
+        batch = path[i]
+        img_A = imread2(batch)
+        img_A = img_A.reshape((1, 80, 96, 80, 1))
+        yield img_A, batch
+
+def imread2( path):
+    k = scio.loadmat(path)
+    img = k['img']
+    return img
+
+
+generator = load_model('D:\MRIHAR\model6\TrainedHGAN.h5')
+for batch_i, (imgs_A, batch) in enumerate(load_val_batch()):
+    imgs_A = np.array(imgs_A)
+    g_loss = generator.predict_on_batch(imgs_A)
+    a2 = 'D:\MRIHAR/test-har' +str(z+1)+'/'+ batch[20:len(batch) - 4] + '.mat'
+    scipy.io.savemat(a2, {'img': g_loss[0]})
