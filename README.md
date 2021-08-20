@@ -11,8 +11,8 @@ HarmonyGAN: A Harmonization Method for Multi-site Structural MRI Based on Style 
 - Keras
 
 ## Author
-Zhang Wei
-Institute of High Energy Physics, Chinese Academy of Sciences,
-Beijing 100049, China
-E-mail: zhangwei2018@ihep.ac.cn
+- Zhang Wei
+- Institute of High Energy Physics, Chinese Academy of Sciences,
+- Beijing 100049, China
+- E-mail: zhangwei2018@ihep.ac.cn
 
