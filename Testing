@@ -6,6 +6,7 @@ import tensorflow
 import numpy as np
 
 def load_val_batch():
+#load data for testing from .mat file. The images must be VBM, grouped-wise z-scored and sized 90*108*90, as described in the paper.
     batch_size = 1
     path = glob('H:\ABIDE\ABIDE\mri\smwp1*.mat')
     print(path)
