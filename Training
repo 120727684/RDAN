@@ -329,4 +329,4 @@ class HarmonyGan():
 
 if __name__ == '__main__':
     gan = HarmonyGan()
-    gan.train(epochs=100000, batch_size=8, sample_interval=200)
+    gan.train(epochs=100000, batch_size=8, sample_interval=200) 
