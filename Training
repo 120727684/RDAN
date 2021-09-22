@@ -171,8 +171,11 @@ class HarmonyGan():
         """U-Net Generator"""
 
         def mul(x):
-            z = K.abs(K.sign(x[0]))
-            return tensorflow.multiply(z, x[1])
+            t = scio.loadmat('D:\MRIHAR\mask.mat')
+            imgg = t['img80']
+            imgg = imgg.reshape((1, 80, 96, 80, 1))
+            imgg = tensorflow.convert_to_tensor(imgg, dtype='float32')
+            return tensorflow.multiply(x, imgg)
 
         def conv2d(layer_input, filters, f_size=3, bh=1):
             """Layers used during downsampling"""
