@@ -47,9 +47,9 @@ class DataLoader():
 
     def load_val_batch(self):
         batch_size = 1
-        path = glob('D:/MRIHAR/nose/test/*.mat')
+        path = glob('D:/MRIHAR/nose/testnew625/*.mat')
         print(path)
-        n_batches = 644
+        n_batches = 625
         for i in range(n_batches):
             batch = path[i]
             img_A = self.imread2(batch)
